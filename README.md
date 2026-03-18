@@ -199,4 +199,4 @@ Proyecto académico - Universitat Politècnica de Catalunya (UPC)
 ---
 
 **¿Dudas?** Revisa el código fuente en `src/ejercicioC.cpp` o el histórico de commits para más detalles.
-```
+
