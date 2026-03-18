@@ -2,7 +2,7 @@
 # Prompts utilizados — Práctica 3C BLE con ESP32
 
 **Alumno:** Bernat  
-**Herramienta IA:** DeepSeek  
+**Herramienta IA:** DeepSeek y Claude
 **Conversación:** https://chat.deepseek.com/share/y7u8lfhzd89plukot0
 
 ---
