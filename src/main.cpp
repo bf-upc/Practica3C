@@ -38,7 +38,7 @@ unsigned long startTime;
 // ——— Función para actualizar JSON ———
 void updateJsonCharacteristic() {
     unsigned long uptime = (millis() - startTime) / 1000;
-    String json = "{\"adc\":" + String(analogRead(ADC_PIN)) +
+    String json = "{\"adc\":" + String(readADCSafe()) +
                   ",\"led\":" + String(ledState ? "true" : "false") +
                   ",\"uptime\":" + String(uptime) + "}";
     pJsonCharacteristic->setValue(json.c_str());
@@ -125,7 +125,7 @@ String buildHtmlPage() {
     <button class='btn off' name='state' value='0'>Apagar</button>
   </form>
   <p>También controlable por BLE (nRF Connect)</p>
-  <p>)" + String(analogRead(ADC_PIN)) + R"( — ADC GPIO4</p>
+  <p>)" + String(readADCSafe()) + R"( — ADC GPIO4</p>
 </body>
 </html>)";
 }
@@ -221,7 +221,15 @@ void setup() {
     Serial.println("🌐 Abre http://192.168.4.1 para controlar el LED");
     Serial.println("🔵 O usa nRF Connect con BLE");
 }
-
+int readADCSafe() {
+    int value = analogRead(ADC_PIN);
+    // Validación de rango (el ADC de 12 bits solo puede dar 0-4095)
+    if (value < 0 || value > 4095) {
+        Serial.println("⚠️  ADC fuera de rango, devolviendo 0");
+        return 0;
+    }
+    return value;
+}
 // ——— Loop ———
 void loop() {
     // Atender peticiones web
@@ -230,7 +238,7 @@ void loop() {
     // Notificaciones BLE cada 1 segundo
     static unsigned long lastNotify = 0;
     if (deviceConnected && notificationsEnabled && millis() - lastNotify >= 1000) {
-        int adc = analogRead(ADC_PIN);
+        int adc = readADCSafe();
         pAdcCharacteristic->setValue(adc);
         pAdcCharacteristic->notify();
         updateJsonCharacteristic();
