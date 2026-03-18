@@ -1,7 +1,7 @@
 /**
- * Ejercicio A — BLE + WiFi AP simultáneo
- * LED controlable desde BLE (característica WRITE) y desde página web (WiFi AP)
- * Variable global ledState compartida entre ambas interfaces
+ * Ejercicio C — Seguridad BLE con PIN de 6 dígitos
+ * Solo dispositivos que introduzcan el PIN correcto pueden controlar el LED
+ * Se añade sobre el sketch del Ejercicio A (BLE + WiFi AP)
  */
 
 #include <Arduino.h>
@@ -12,39 +12,55 @@
 #include <WiFi.h>
 #include <WebServer.h>
 
-// ——— UUIDs BLE ———
+// ——— UUIDs ———
 #define SERVICE_UUID             "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHARACTERISTIC_ADC_UUID  "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 #define CHARACTERISTIC_LED_UUID  "beb5483e-36e1-4688-b7f5-ea07361b26a9"
 #define CHARACTERISTIC_JSON_UUID "beb5483e-36e1-4688-b7f5-ea07361b26aa"
+#define CHARACTERISTIC_AUTH_UUID "beb5483e-36e1-4688-b7f5-ea07361b26ab"  // NUEVA: autenticación
 
-// ——— Pines ———
-#define ADC_PIN 4
+// ——— Config ———
+#define ADC_PIN       4
+#define CORRECT_PIN   "123456"   // PIN de 6 dígitos
 
 // ——— WiFi AP ———
 const char* AP_SSID     = "ESP32-S3_BERNAT";
 const char* AP_PASSWORD = "12345678";
 WebServer server(80);
 
-// ——— Variables globales compartidas ———
+// ——— Variables globales ———
 BLECharacteristic *pAdcCharacteristic;
 BLECharacteristic *pLedCharacteristic;
 BLECharacteristic *pJsonCharacteristic;
+BLECharacteristic *pAuthCharacteristic;
+
 bool deviceConnected      = false;
-bool ledState             = false;   // ← compartida entre BLE y WiFi
+bool ledState             = false;
 bool notificationsEnabled = false;
+bool bleAuthenticated     = false;   // ← nuevo flag de autenticación BLE
 unsigned long startTime;
 
-// ——— Función para actualizar JSON ———
+// ——— ADC con validación ———
+int readADCSafe() {
+    int value = analogRead(ADC_PIN);
+    if (value < 0 || value > 4095) {
+        Serial.println("⚠️  ADC fuera de rango, devolviendo 0");
+        return 0;
+    }
+    return value;
+}
+
+// ——— JSON ———
 void updateJsonCharacteristic() {
     unsigned long uptime = (millis() - startTime) / 1000;
-    String json = "{\"adc\":" + String(readADCSafe()) +
-                  ",\"led\":" + String(ledState ? "true" : "false") +
-                  ",\"uptime\":" + String(uptime) + "}";
+    String json = "{\"adc\":"    + String(readADCSafe()) +
+                  ",\"led\":"    + String(ledState ? "true" : "false") +
+                  ",\"uptime\":" + String(uptime) +
+                  ",\"auth\":"   + String(bleAuthenticated ? "true" : "false") + "}";
     pJsonCharacteristic->setValue(json.c_str());
 }
 
-// ——— Función para aplicar estado del LED ———
+// ——— Aplicar estado del LED (con comprobación de autenticación) ———
 void applyLed(bool state, const char* source) {
     ledState = state;
     digitalWrite(LED_BUILTIN, state ? HIGH : LOW);
@@ -55,19 +71,46 @@ void applyLed(bool state, const char* source) {
 // ——— Callbacks BLE ———
 class MyServerCallbacks : public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
-        deviceConnected = true;
-        Serial.println("✅ Cliente BLE conectado");
+        deviceConnected    = true;
+        bleAuthenticated   = false;   // reset al conectar
+        Serial.println("✅ Cliente BLE conectado — autenticación requerida");
     }
     void onDisconnect(BLEServer* pServer) {
-        deviceConnected = false;
+        deviceConnected    = false;
+        bleAuthenticated   = false;
         notificationsEnabled = false;
         Serial.println("❌ Cliente BLE desconectado");
         pServer->getAdvertising()->start();
     }
 };
 
+// ——— Característica de autenticación ———
+// El cliente escribe el PIN aquí. Si es correcto, bleAuthenticated = true
+class AuthCharacteristicCallbacks : public BLECharacteristicCallbacks {
+    void onWrite(BLECharacteristic *pCharacteristic) {
+        std::string pin = pCharacteristic->getValue();
+        Serial.printf("🔐 Intento de PIN: '%s'\n", pin.c_str());
+
+        if (pin == CORRECT_PIN) {
+            bleAuthenticated = true;
+            pAuthCharacteristic->setValue("OK");
+            Serial.println("✅ PIN correcto — acceso BLE concedido");
+        } else {
+            bleAuthenticated = false;
+            pAuthCharacteristic->setValue("FAIL");
+            Serial.printf("❌ PIN incorrecto (intento: '%s')\n", pin.c_str());
+        }
+    }
+};
+
+// ——— Característica LED (con comprobación de autenticación) ———
 class LedCharacteristicCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *pCharacteristic) {
+        if (!bleAuthenticated) {
+            pLedCharacteristic->setValue("AUTH_REQUIRED");
+            Serial.println("🚫 Intento de control LED sin autenticación — rechazado");
+            return;
+        }
         std::string value = pCharacteristic->getValue();
         if (value == "1")      applyLed(true,  "BLE");
         else if (value == "0") applyLed(false, "BLE");
@@ -91,7 +134,7 @@ class JsonCharacteristicCallbacks : public BLECharacteristicCallbacks {
     }
 };
 
-// ——— Página web HTML ———
+// ——— Página web ———
 String buildHtmlPage() {
     String color  = ledState ? "#FFD700" : "#444";
     String estado = ledState ? "ENCENDIDO" : "APAGADO";
@@ -109,11 +152,11 @@ String buildHtmlPage() {
     .led { width: 80px; height: 80px; border-radius: 50%;
            background: )" + color + R"(; margin: 20px auto;
            box-shadow: 0 0 30px )" + color + R"(; }
-    .btn { padding: 14px 40px; font-size: 18px; border: none; border-radius: 8px;
-           cursor: pointer; margin: 8px; }
+    .btn { padding: 14px 40px; font-size: 18px; border: none;
+           border-radius: 8px; cursor: pointer; margin: 8px; }
     .on  { background: #FFD700; color: #1a1a2e; }
-    .off { background: #555;    color: #eee;    }
-    p    { color: #aaa; font-size: 14px; }
+    .off { background: #555;    color: #eee; }
+    .info { color: #aaa; font-size: 13px; margin-top: 8px; }
   </style>
 </head>
 <body>
@@ -124,24 +167,19 @@ String buildHtmlPage() {
     <button class='btn on'  name='state' value='1'>Encender</button>
     <button class='btn off' name='state' value='0'>Apagar</button>
   </form>
-  <p>También controlable por BLE (nRF Connect)</p>
-  <p>)" + String(readADCSafe()) + R"( — ADC GPIO4</p>
+  <p class='info'>BLE: escribe PIN en característica AUTH antes de controlar el LED</p>
+  <p class='info'>)" + String(readADCSafe()) + R"( — ADC GPIO4</p>
 </body>
 </html>)";
 }
 
-// ——— Handlers del servidor web ———
-void handleRoot() {
-    server.send(200, "text/html", buildHtmlPage());
-}
-
+void handleRoot() { server.send(200, "text/html", buildHtmlPage()); }
 void handleLed() {
     if (server.hasArg("state")) {
-        String state = server.arg("state");
-        if (state == "1")      applyLed(true,  "WiFi Web");
-        else if (state == "0") applyLed(false, "WiFi Web");
+        String s = server.arg("state");
+        if (s == "1")      applyLed(true,  "WiFi Web");
+        else if (s == "0") applyLed(false, "WiFi Web");
     }
-    // Redirige de vuelta a la página principal
     server.sendHeader("Location", "/");
     server.send(303);
 }
@@ -151,64 +189,60 @@ void setup() {
     startTime = millis();
     Serial.begin(115200);
     delay(1000);
-    Serial.println("\n🔌 BLE + WiFi AP — ESP32-S3_BERNAT");
+    Serial.println("\n🔐 BLE + WiFi AP + PIN Auth — ESP32-S3_BERNAT");
 
-    // LED
     pinMode(LED_BUILTIN, OUTPUT);
     digitalWrite(LED_BUILTIN, LOW);
-
-    // ADC
     pinMode(ADC_PIN, INPUT);
     analogReadResolution(12);
 
-    // ——— WiFi Access Point ———
+    // WiFi AP
     WiFi.softAP(AP_SSID, AP_PASSWORD);
-    IPAddress ip = WiFi.softAPIP();
-    Serial.print("📶 WiFi AP activo — IP: ");
-    Serial.println(ip);
-
+    Serial.printf("📶 WiFi AP — IP: %s\n", WiFi.softAPIP().toString().c_str());
     server.on("/",    handleRoot);
     server.on("/led", handleLed);
     server.begin();
-    Serial.println("🌐 Servidor web iniciado en http://192.168.4.1");
 
-    // ——— BLE ———
+    // BLE
     BLEDevice::init("ESP32-S3_BERNAT");
     BLEServer *pServer = BLEDevice::createServer();
     pServer->setCallbacks(new MyServerCallbacks());
-
     BLEService *pService = pServer->createService(SERVICE_UUID);
 
-    // Característica ADC — READ | NOTIFY
+    // ADC — READ | NOTIFY
     pAdcCharacteristic = new BLECharacteristic(
         CHARACTERISTIC_ADC_UUID,
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
-    );
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
     pService->addCharacteristic(pAdcCharacteristic);
     BLE2902 *pBLE2902 = new BLE2902();
     pBLE2902->setCallbacks(new MyCCCDCallbacks());
     pBLE2902->setNotifications(false);
     pAdcCharacteristic->addDescriptor(pBLE2902);
 
-    // Característica LED — WRITE
+    // LED — WRITE (protegido con PIN)
     pLedCharacteristic = new BLECharacteristic(
         CHARACTERISTIC_LED_UUID,
-        BLECharacteristic::PROPERTY_WRITE
-    );
+        BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_READ);
     pService->addCharacteristic(pLedCharacteristic);
     pLedCharacteristic->setCallbacks(new LedCharacteristicCallbacks());
 
-    // Característica JSON — READ
+    // JSON — READ
     pJsonCharacteristic = new BLECharacteristic(
         CHARACTERISTIC_JSON_UUID,
-        BLECharacteristic::PROPERTY_READ
-    );
+        BLECharacteristic::PROPERTY_READ);
     pService->addCharacteristic(pJsonCharacteristic);
     pJsonCharacteristic->setCallbacks(new JsonCharacteristicCallbacks());
     updateJsonCharacteristic();
 
-    pService->start();
+    // AUTH — WRITE | READ  ← nueva característica
+    pAuthCharacteristic = new BLECharacteristic(
+        CHARACTERISTIC_AUTH_UUID,
+        BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_READ);
+    pService->addCharacteristic(pAuthCharacteristic);
+    pAuthCharacteristic->setValue("LOCKED");
+    pAuthCharacteristic->setCallbacks(new AuthCharacteristicCallbacks());
 
+    pService->start();
     BLEAdvertising *pAdvertising = pServer->getAdvertising();
     pAdvertising->addServiceUUID(SERVICE_UUID);
     pAdvertising->setScanResponse(true);
@@ -216,36 +250,28 @@ void setup() {
     BLEDevice::startAdvertising();
 
     Serial.println("📡 BLE advertising iniciado");
-    Serial.println("——————————————————————————");
-    Serial.println("📱 Conecta al WiFi 'ESP32-S3_BERNAT' (pass: 12345678)");
-    Serial.println("🌐 Abre http://192.168.4.1 para controlar el LED");
-    Serial.println("🔵 O usa nRF Connect con BLE");
+    Serial.println("🔐 Flujo de autenticación:");
+    Serial.println("   1. Conectar con nRF Connect");
+    Serial.println("   2. Escribir '123456' en característica AUTH (UUID ...26ab)");
+    Serial.println("   3. Si responde 'OK' → ya puedes controlar el LED");
+    Serial.println("   4. Si responde 'FAIL' → PIN incorrecto, acceso denegado");
 }
-int readADCSafe() {
-    int value = analogRead(ADC_PIN);
-    // Validación de rango (el ADC de 12 bits solo puede dar 0-4095)
-    if (value < 0 || value > 4095) {
-        Serial.println("⚠️  ADC fuera de rango, devolviendo 0");
-        return 0;
-    }
-    return value;
-}
+
 // ——— Loop ———
 void loop() {
-    // Atender peticiones web
     server.handleClient();
 
-    // Notificaciones BLE cada 1 segundo
     static unsigned long lastNotify = 0;
     if (deviceConnected && notificationsEnabled && millis() - lastNotify >= 1000) {
         int adc = readADCSafe();
         pAdcCharacteristic->setValue(adc);
         pAdcCharacteristic->notify();
         updateJsonCharacteristic();
-        Serial.printf("🔔 NOTIFY ADC: %d (%.2fV) | LED: %s\n",
-            adc, (adc / 4095.0) * 3.3, ledState ? "ON" : "OFF");
+        Serial.printf("🔔 NOTIFY ADC: %d (%.2fV) | LED: %s | Auth: %s\n",
+            adc, (adc / 4095.0) * 3.3,
+            ledState ? "ON" : "OFF",
+            bleAuthenticated ? "OK" : "LOCKED");
         lastNotify = millis();
     }
-
     delay(10);
 }
