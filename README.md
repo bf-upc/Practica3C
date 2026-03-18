@@ -1,145 +1,202 @@
-# Práctica 3C - Control Dual: WiFi (AP) + BLE Simultáneo
+# Práctica 3C - Control Dual con Autenticación BLE (PIN de 6 dígitos)
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-IDE-blue?logo=platformio)](https://platformio.org/)
-[![ESP32](https://img.shields.io/badge/ESP32-S3-orange)](https://www.espressif.com/)
+[![ESP32-S3](https://img.shields.io/badge/ESP32-S3-orange)](https://www.espressif.com/)
 
-Este repositorio contiene el código para la **Práctica 3C**, que implementa un sistema de control dual en un ESP32-S3. El dispositivo actúa como un **punto de acceso WiFi** y como **periférico BLE** simultáneamente, permitiendo controlar un LED desde una página web o desde una aplicación BLE.
+Este repositorio contiene el código para la **Práctica 3C**, que implementa un sistema de control dual en un ESP32-S3 con **seguridad mejorada mediante autenticación por PIN en BLE**. El dispositivo actúa como punto de acceso WiFi y como periférico BLE, pero ahora el control por BLE requiere un PIN de 6 dígitos.
 
 ## 📝 Descripción
 
-El proyecto demuestra la capacidad de un ESP32 para gestionar múltiples interfaces de comunicación de forma concurrente. La variable de estado del LED (`ledState`) es **compartida y sincronizada** entre ambas interfaces, permitiendo un control coherente sin importar el método utilizado.
+El proyecto demuestra un sistema embebido con múltiples interfaces de comunicación y **control de acceso seguro** para BLE. La variable de estado del LED (`ledState`) es compartida entre interfaces, pero las operaciones por BLE están protegidas por autenticación.
 
-**Características principales:**
-- **Punto de Acceso WiFi**: Crea su propia red WiFi para acceder a un servidor web embebido
-- **Servidor BLE**: Actúa como periféneo Bluetooth Low Energy
-- **Control Unificado**: El estado del LED se mantiene sincronizado entre ambas interfaces
-- **Monitorización ADC**: Lectura analógica del pin GPIO4 visible en ambas plataformas
-- **Notificaciones BLE**: Envío periódico del valor ADC cuando hay un cliente conectado
+### 🆕 Novedades (Ejercicio Extra C)
+- **Autenticación por PIN de 6 dígitos** para control BLE
+- Nueva característica BLE `AUTH` para verificación de identidad
+- Flag `bleAuthenticated` que habilita/deshabilita el control LED por BLE
+- Mensajes de depuración detallados para el flujo de autenticación
+- Estado de autenticación incluido en la característica JSON
 
-## ✨ Funcionalidad Destacada (Ejercicio Extra A)
+## ✨ Funcionalidades
 
-El commit más reciente implementa el **control simultáneo por WiFi (AP) y BLE**, con las siguientes capacidades:
+### WiFi (Punto de Acceso)
+- Crea red WiFi con SSID: `ESP32-S3_BERNAT` (pass: `12345678`)
+- Servidor web en `http://192.168.4.1`
+- Control LED sin autenticación (acceso libre por WiFi)
 
-- **WiFi**: El ESP32-S3 crea su propia red con SSID `ESP32-S3_BERNAT` y contraseña `12345678`
-- **Servidor Web**: Interfaz web accesible en `http://192.168.4.1` con botones para encender/apagar el LED
-- **BLE**: Servicio con tres características (ADC, LED y JSON) para control desde apps como nRF Connect
-- **Sincronización**: El LED se actualiza inmediatamente venga el comando de WiFi o BLE
+### BLE con Seguridad PIN
+- Servicio BLE con 4 características:
+  - **ADC** (`...b26a8`): Lectura analógica (READ/NOTIFY)
+  - **LED** (`...b26a9`): Control LED (WRITE) **protegido por PIN**
+  - **JSON** (`...b26aa`): Estado completo (READ)
+  - **AUTH** (`...b26ab`): Autenticación PIN (WRITE/READ) **NUEVA**
+
+### 🔐 Flujo de Autenticación BLE
+```
+1. Cliente se conecta al dispositivo BLE
+2. Cliente escribe PIN "123456" en característica AUTH
+3. ESP32 verifica y responde "OK" o "FAIL"
+4. Si OK → flag bleAuthenticated = true → permite control LED
+5. Si FAIL → flag bleAuthenticated = false → comandos LED rechazados
+```
 
 ## 📁 Estructura del Proyecto
 
 ```
 Practica3C/
 ├── include/          # Archivos de cabecera
-├── lib/              # Librerías del proyecto
-├── src/              # Código fuente principal (ejercicioA.cpp)
+├── lib/              # Librerías privadas
+├── src/              # Código fuente principal
+│   └── ejercicioC.cpp # Versión con autenticación PIN
 ├── test/             # Pruebas
-└── platformio.ini    # Configuración de PlatformIO
+└── platformio.ini    # Configuración PlatformIO
 ```
 
 ## 🚀 Comenzando
 
 ### Prerrequisitos
+- **Hardware**: ESP32-S3 (o compatible con WiFi + BLE)
+- **Software**: PlatformIO, app BLE (nRF Connect/LightBlue)
 
-- **Plataforma**: [PlatformIO](https://platformio.org/) (extensión VSCode o CLI)
-- **Hardware**: Placa ESP32-S3 (o compatible con WiFi + BLE)
-- **Conexiones**: LED incorporado (o externo en el pin correspondiente) y ADC en GPIO4
+### Instalación Rápida
+```bash
+git clone https://github.com/bf-upc/Practica3C.git
+cd Practica3C
+pio run --target upload
+pio device monitor
+```
 
-### Instalación y Uso
+## 🎮 Guía de Uso
 
-1. **Clonar el repositorio:**
-   ```bash
-   git clone https://github.com/bf-upc/Practica3C.git
-   ```
+### 1️⃣ Conexión WiFi (Acceso Web)
+```bash
+# Conéctate a la red WiFi:
+SSID: ESP32-S3_BERNAT
+Password: 12345678
 
-2. **Abrir en PlatformIO** y compilar el proyecto
+# Abre en navegador:
+http://192.168.4.1
+```
+✅ Control LED **sin autenticación** por web
 
-3. **Subir el firmware** a tu placa ESP32-S3:
-   ```bash
-   pio run --target upload
-   ```
+### 2️⃣ Conexión BLE con Autenticación
+```
+📱 Usando nRF Connect:
 
-4. **Abrir el monitor serie** para ver la salida de depuración:
-   ```bash
-   pio device monitor
-   ```
+1. Escanea y conecta a "ESP32-S3_BERNAT"
+2. Busca característica AUTH (UUID ...26ab)
+3. Escribe "123456" → recibe "OK"
+4. ¡Ya puedes escribir en LED (...26a9)!
+   - "1" = ENCENDER
+   - "0" = APAGAR
+```
 
-## 🎮 Cómo Usarlo
-
-### Conexión WiFi (Punto de Acceso)
-
-1. El ESP32-S3 crea la red WiFi: **`ESP32-S3_BERNAT`** (contraseña: `12345678`)
-2. Conéctate a esta red desde tu teléfono u ordenador
-3. Abre un navegador y ve a **`http://192.168.4.1`**
-4. Verás una interfaz web con un indicador LED y botones para controlarlo
-
-### Conexión BLE
-
-1. Usa una app como **nRF Connect** o **LightBlue** en tu móvil
-2. Escanea dispositivos BLE y conecta a **`ESP32-S3_BERNAT`**
-3. Explora el servicio con UUID: `4fafc201-1fb5-459e-8fcc-c5c9c331914b`
-4. Características disponibles:
-   - **ADC** (`...b26a8`): Lectura del pin GPIO4 (valor 0-4095)
-   - **LED** (`...b26a9`): Escribe `1` para encender, `0` para apagar
-   - **JSON** (`...b26aa`): Información completa en formato JSON
-
-## 🔧 Detalles Técnicos
-
-### Pines Utilizados
-| Pin | Función | Descripción |
-|-----|---------|-------------|
-| LED_BUILTIN | LED | LED interno de la placa |
-| GPIO4 | ADC | Entrada analógica (0-3.3V) |
-
-### Red WiFi
-| Parámetro | Valor |
-|-----------|-------|
-| SSID | ESP32-S3_BERNAT |
-| Contraseña | 12345678 |
-| IP | 192.168.4.1 |
-| Puerto | 80 |
-
-### Servicio BLE
-| UUID | Propiedades | Descripción |
-|------|-------------|-------------|
-| Servicio: `4fafc201-1fb5-459e-8fcc-c5c9c331914b` | - | Servicio principal |
-| Caract. ADC: `...b26a8` | READ, NOTIFY | Valor analógico |
-| Caract. LED: `...b26a9` | WRITE | Control LED |
-| Caract. JSON: `...b26aa` | READ | Estado completo |
-
-### Comunicación JSON
+### 3️⃣ Verificación de Estado
+La característica JSON (`...26aa`) devuelve:
 ```json
 {
   "adc": 2048,
   "led": true,
-  "uptime": 42
+  "uptime": 42,
+  "auth": true    // ← estado de autenticación BLE
 }
 ```
 
-## 📡 Salida por Monitor Serie
+## 🔧 Detalles Técnicos
 
-El programa proporciona información detallada por el puerto serie:
+### Configuración PIN
+```cpp
+#define CORRECT_PIN "123456"   // PIN por defecto (modificable)
 ```
-🔌 BLE + WiFi AP — ESP32-S3_BERNAT
-📶 WiFi AP activo — IP: 192.168.4.1
-🌐 Servidor web iniciado en http://192.168.4.1
+
+### Características BLE
+| UUID (sufijo) | Propiedades | Descripción | Requiere Auth |
+|---------------|-------------|-------------|---------------|
+| `...b26a8` | READ/NOTIFY | Valor ADC (GPIO4) | No |
+| `...b26a9` | WRITE/READ | Control LED | **SÍ** |
+| `...b26aa` | READ | Estado JSON | No |
+| `...b26ab` | WRITE/READ | Autenticación PIN | No |
+
+### Mensajes de Seguridad
+```
+🔐 Intento de PIN: '123456'
+✅ PIN correcto — acceso BLE concedido
+
+🔐 Intento de PIN: '000000'
+❌ PIN incorrecto (intento: '000000')
+
+🚫 Intento de control LED sin autenticación — rechazado
+```
+
+## 📊 Comparativa Ejercicios
+
+| Característica | Ejercicio A | Ejercicio C |
+|----------------|--------------|--------------|
+| WiFi AP | ✅ | ✅ |
+| BLE | ✅ | ✅ |
+| Control Web | ✅ | ✅ |
+| Autenticación PIN | ❌ | ✅ |
+| Característica AUTH | ❌ | ✅ |
+| Flag bleAuthenticated | ❌ | ✅ |
+| Reset Auth al desconectar | ❌ | ✅ |
+
+## 🛡️ Modelo de Seguridad
+
+```
+CONEXIÓN BLE ESTABLECIDA
+        ↓
+┌─────────────────┐
+│  NO AUTENTICADO │ ← LED WRITE bloqueado
+└─────────────────┘
+        ↓ (escribe PIN correcto)
+┌─────────────────┐
+│   AUTENTICADO   │ ← LED WRITE permitido
+└─────────────────┘
+        ↓ (desconexión)
+┌─────────────────┐
+│  NO AUTENTICADO │ ← Reset automático
+└─────────────────┘
+```
+
+## 📡 Salida Monitor Serie
+
+```
+🔐 BLE + WiFi AP + PIN Auth — ESP32-S3_BERNAT
+📶 WiFi AP — IP: 192.168.4.1
 📡 BLE advertising iniciado
-——————————————————————————
-📱 Conecta al WiFi 'ESP32-S3_BERNAT' (pass: 12345678)
-🌐 Abre http://192.168.4.1 para controlar el LED
-🔵 O usa nRF Connect con BLE
-💡 LED ENCENDIDO via WiFi Web
-🔔 NOTIFY ADC: 1234 (1.02V) | LED: ON
-💡 LED APAGADO via BLE
+🔐 Flujo de autenticación:
+   1. Conectar con nRF Connect
+   2. Escribir '123456' en característica AUTH (UUID ...26ab)
+   3. Si responde 'OK' → ya puedes controlar el LED
+   4. Si responde 'FAIL' → PIN incorrecto, acceso denegado
+
+✅ Cliente BLE conectado — autenticación requerida
+🔐 Intento de PIN: '123456'
+✅ PIN correcto — acceso BLE concedido
+💡 LED ENCENDIDO via BLE
+🔔 NOTIFY ADC: 2048 (1.65V) | LED: ON | Auth: OK
+❌ Cliente BLE desconectado
 ```
 
-## 📜 Notas Importantes
+## ⚙️ Personalización
 
-- El dispositivo **no se conecta a Internet**, crea su propia red local
-- Puedes controlar el LED simultáneamente desde la web y BLE
-- Las notificaciones BLE se activan cuando un cliente habilita las notificaciones en la característica ADC
-- El valor ADC se actualiza cada segundo cuando hay un cliente BLE conectado
+Para cambiar el PIN de autenticación:
+```cpp
+#define CORRECT_PIN "tu_pin"   // modificar en ejercicioC.cpp
+```
+
+## 📝 Notas Importantes
+
+- El PIN se verifica **en cada intento** de autenticación
+- La autenticación se **resetea automáticamente** al desconectar BLE
+- El control por WiFi **no requiere autenticación** (acceso libre)
+- La característica LED responde `AUTH_REQUIRED` si no hay autenticación
+- El estado de autenticación es visible en la característica JSON
 
 ## 📄 Licencia
 
-Proyecto académico - Universidad Politécnica de Cataluña (UPC)
+Proyecto académico - Universitat Politècnica de Catalunya (UPC)
 
+---
+
+**¿Dudas?** Revisa el código fuente en `src/ejercicioC.cpp` o el histórico de commits para más detalles.
+```
